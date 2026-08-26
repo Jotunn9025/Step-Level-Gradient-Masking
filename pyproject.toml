@@ -1,0 +1,12 @@
+[project]
+name = "step-based-updates"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "datasets",
+    "pandas",
+    "peft",
+    "sympy",
+    "tqdm",
+    "trl[vllm]"
+]
