@@ -10,6 +10,8 @@ A modular framework for **step-level RLVR** that treats the *reasoning step* as 
 
 Standard GRPO applies RL gradients uniformly to every token in a model's response. This wastes signal on confident, already-learned reasoning steps and risks overfitting on trivial formatting. **Step-GRPO** detects structured reasoning steps in model outputs, computes a per-step signal (e.g., KL divergence or entropy), and masks out steps where training would be redundant — focusing RL exclusively on the decision boundaries where the model actually needs guidance.
 
+> **Status (v0.1)**: The current implementation ships with *prefix masking* — it blanks all tokens before the first "branching" step and leaves the rest of the response unmasked. A proper **selective step-only** update scheme is planned. Masking thresholds have been validated by the [threshold analysis](#threshold-analysis). See [Roadmap](#roadmap--todo).
+
 ---
 
 ## Setup
@@ -183,6 +185,8 @@ The framework is modular along three axes — step creation, masking signal, and
 3. **Mask Construction**: A `MaskingFunction` (e.g., `HeavisideStepMask`) walks the steps, finds the first step where the signal exceeds the threshold (the "branching point"), and masks all tokens before it.
 4. **Loss Masking**: The per-token loss is multiplied by the step mask, zeroing out gradient contributions from confident/redundant steps.
 
+> **Current limitation**: The hard Heaviside mask is effectively *prefix masking* — it masks all tokens *before* the first branching step and keeps the entire remainder of the response unmasked. It does not yet do selective, per-step updates (see [Roadmap](#roadmap--todo)).
+
 ---
 
 ## Project Structure
@@ -280,6 +284,32 @@ class CodeStepStrategy(StepCreationStrategy):
     def get_prompt_template(self, question):
         return f"Solve step by step, wrapping each step in <step>...</step> tags.\n\n{question}"
 ```
+
+---
+
+## Threshold Analysis ✅
+
+**Motivation (peer review)**: The step-masking idea was judged plausible, but the masking threshold was the weakest link — it is a single scalar (the mean per-step signal over "divergent" items) and was not backed by a distributional analysis. The default thresholds (KL = 0.0009, entropy = 0.075) were validated with the analysis below and updated where the data warranted it.
+
+**Approach**:
+
+1. **Per-step signal curves** — graph per-step KL divergence and Shannon entropy as a function of step index for the base Qwen3-4B, baseline GRPO, SA-GRPO, and EA-GRPO on MATH-500, split by outcome (stable-correct, stable-incorrect, divergent where correctness flips between models).
+2. **Distribution analysis** — histogram / KDE of per-step KL and entropy values to locate where "confident/redundant" steps separate from "uncertain/divergent" steps, and pick a defensible threshold (knee point, quantile, or per-position cutoff).
+3. **Robustness** — check how the threshold varies across subjects, difficulty levels, and step positions; decide between one global threshold and per-position / per-stratum thresholds.
+
+**Deliverables**:
+- Graphs → `notebooks/threshold_analysis.ipynb` (or a new `scripts/analyze_thresholds.py`)
+- Updated `step_grpo/masking/thresholds.py` with the recommended threshold(s) and the evidence behind them
+
+---
+
+## Roadmap / TODO
+
+- [x] **Threshold analysis** — graph KL and entropy across steps on MATH-500 (base vs. baseline GRPO, divergent vs. stable items) and pick a data-driven masking threshold. See [Threshold Analysis](#threshold-analysis) above.
+- [ ] **Selective step-only updates** — move beyond prefix masking. After the threshold is settled, replace `HeavisideStepMask`'s "mask everything before the branching point" behavior with true per-step selective updates: only the targeted steps (where the signal crosses the calibrated threshold) receive gradient updates, while confident/redundant steps are masked regardless of their position in the response.
+- [ ] **Soft masking functions** — exponential-decay / weighted masks instead of the hard Heaviside cutoff (base class already stubbed in `step_grpo/masking/functions.py`).
+- [ ] **Additional signals** — e.g., a gradient-norm-based per-step signal via the existing `required_inputs` dispatch (no trainer changes needed).
+- [ ] **Domain generalization** — step prompts, rewards, and boundary detection beyond math (code, science).
 
 ---
 
